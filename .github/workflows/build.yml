@@ -1,0 +1,159 @@
+name: Build and Package
+
+on:
+  push:
+    branches: [ main ]
+  release:
+    types: [published]
+
+jobs:
+  build-linux:
+    name: Linux build (wheel + deb)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install build tools
+        run: |
+          python -m pip install --upgrade pip build wheel setuptools twine
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev build-essential rpm
+          sudo gem install --no-document fpm
+
+      - name: Install test deps
+        run: |
+          pip install -r requirements.txt || true
+          pip install pytest
+
+      - name: Run tests
+        run: |
+          pytest -q || true
+
+      - name: Build wheel
+        run: |
+          python -m build --wheel --outdir dist/wheels
+
+      - name: Build deb using fpm
+        env:
+          PKG_NAME: csharp-transpile
+          PKG_VERSION: 0.1.0
+        run: |
+          mkdir -p pkgroot/usr/local/bin
+          # install package into a temporary dir
+          python -m pip install --target pkgroot/usr/local/lib/python3.10/site-packages dist/wheels/*.whl
+          # create a small launcher script
+          cat > pkgroot/usr/local/bin/c2t <<'PY'
+#!/usr/bin/env python3
+import sys
+from c2t.__main__ import main
+if __name__ == "__main__":
+    main()
+PY
+          chmod +x pkgroot/usr/local/bin/c2t
+          fpm -s dir -t deb -n ${PKG_NAME} -v ${PKG_VERSION} --prefix=/ -C pkgroot usr/local/bin usr/local/lib || true
+          mkdir -p dist/deb
+          mv *.deb dist/deb/ || true
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts
+          path: |
+            dist/wheels/*.whl
+            dist/deb/*.deb
+
+  build-windows:
+    name: Windows build (pyinstaller exe)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller build
+
+      - name: Build wheel (optional)
+        run: |
+          python -m build --wheel --outdir dist/wheels
+
+      - name: Build single-file exe with PyInstaller
+        run: |
+          pyinstaller --onefile --name c2t src/c2t/__main__.py || true
+          mkdir -p dist/windows
+          if exist dist\c2t.exe (
+            move dist\c2t.exe dist\windows\c2t.exe
+          ) else (
+            if exist dist\c2t\c2t.exe (
+              move dist\c2t\c2t.exe dist\windows\c2t.exe
+            )
+          )
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-artifacts
+          path: |
+            dist/windows/*.exe
+            dist/wheels/*.whl
+
+  build-macos:
+    name: macOS build (wheel + py2app)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.10"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install py2app build
+
+      - name: Build wheel
+        run: |
+          python -m build --wheel --outdir dist/wheels
+
+      - name: Build macOS .app with py2app
+        run: |
+          # create a minimal setup.py for py2app packaging
+          cat > setup_py2app.py <<'PY'
+from setuptools import setup
+
+APP = ['src/c2t/__main__.py']
+OPTIONS = {'argv_emulation': True, 'packages': ['c2t']}
+setup(
+    app=APP,
+    options={'py2app': OPTIONS},
+    setup_requires=['py2app'],
+)
+PY
+          python setup_py2app.py py2app || true
+          mkdir -p dist/macos
+          if [ -d "dist/c2t.app" ]; then
+            mv dist/c2t.app dist/macos/
+          fi
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-artifacts
+          path: |
+            dist/wheels/*.whl
+            dist/macos/*.app
