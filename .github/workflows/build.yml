@@ -45,9 +45,7 @@ jobs:
           PKG_VERSION: 0.1.0
         run: |
           mkdir -p pkgroot/usr/local/bin
-          # install package into a temporary dir
           python -m pip install --target pkgroot/usr/local/lib/python3.10/site-packages dist/wheels/*.whl
-          # create a small launcher script
           cat > pkgroot/usr/local/bin/c2t <<'PY'
 #!/usr/bin/env python3
 import sys
@@ -132,18 +130,16 @@ PY
 
       - name: Build macOS .app with py2app
         run: |
-          # create a minimal setup.py for py2app packaging
-          cat > setup_py2app.py <<'PY'
-from setuptools import setup
-
-APP = ['src/c2t/__main__.py']
-OPTIONS = {'argv_emulation': True, 'packages': ['c2t']}
-setup(
-    app=APP,
-    options={'py2app': OPTIONS},
-    setup_requires=['py2app'],
-)
-PY
+          # create a minimal setup_py2app file safely (avoid unindented heredoc issues)
+          printf '%s\n' "from setuptools import setup" > setup_py2app.py
+          printf '%s\n' "" >> setup_py2app.py
+          printf '%s\n' "APP = ['src/c2t/__main__.py']" >> setup_py2app.py
+          printf '%s\n' "OPTIONS = {'argv_emulation': True, 'packages': ['c2t']}" >> setup_py2app.py
+          printf '%s\n' "setup(" >> setup_py2app.py
+          printf '%s\n' "    app=APP," >> setup_py2app.py
+          printf '%s\n' "    options={'py2app': OPTIONS}," >> setup_py2app.py
+          printf '%s\n' "    setup_requires=['py2app']," >> setup_py2app.py
+          printf '%s\n' ")" >> setup_py2app.py
           python setup_py2app.py py2app || true
           mkdir -p dist/macos
           if [ -d "dist/c2t.app" ]; then
